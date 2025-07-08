@@ -1,241 +1,230 @@
-// server.js
-// This is the backend for the AI Antakshari game.
-// It uses Node.js, Express, and Socket.IO.
-
 const express = require('express');
 const http = require('http');
-const { Server } = require("socket.io");
+const socketIo = require('socket.io');
+const path = require('path'); // Import path module for serving static files
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*", // Allow all origins for simplicity. For production, restrict this.
-        methods: ["GET", "POST"]
-    }
-});
+const io = socketIo(server);
 
+// Render automatically provides the PORT environment variable
 const PORT = process.env.PORT || 10000;
 
-// --- Data Structures ---
-let rooms = {}; // Stores all game rooms
+// Serve static files (like index.html) from the current directory.
+// This is crucial for serving your frontend files.
+app.use(express.static(path.join(__dirname)));
 
-// --- Game Constants ---
-const HINDI_CONSONANTS = ["क", "ख", "ग", "घ", "च", "छ", "ज", "झ", "ट", "ठ", "ड", "ढ", "ण", "त", "थ", "द", "ध", "न", "प", "फ", "ब", "भ", "म", "य", "र", "ल", "व", "श", "ष", "स", "ह"];
-const TIME_LIMIT = 30; // seconds
+// Explicitly serve index.html for the root route.
+// This ensures that when someone visits your Render URL, they get the game's HTML.
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
-// --- Helper Functions ---
+// Store active rooms and their players
+const rooms = {};
+
+// AI Antakshari Logic (simplified for this example)
+const hindiLetters = ['अ', 'आ', 'इ', 'ई', 'उ', 'ऊ', 'ए', 'ऐ', 'ओ', 'औ', 'क', 'ख', 'ग', 'घ', 'च', 'छ', 'ज', 'झ', 'ट', 'ठ', 'ड', 'ढ', 'त', 'थ', 'द', 'ध', 'न', 'प', 'फ', 'ब', 'भ', 'म', 'य', 'र', 'ल', 'व', 'श', 'ष', 'स', 'ह'];
+
+/**
+ * Generates a unique 4-character alphanumeric room code.
+ * @returns {string} The generated room code.
+ */
 function generateRoomCode() {
-    let code;
-    do {
-        code = Math.random().toString(36).substring(2, 6).toUpperCase();
-    } while (rooms[code]);
+    let code = '';
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < 4; i++) {
+        code += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
     return code;
 }
 
-// --- Socket.IO Connection Logic ---
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id} with username ${socket.handshake.query.username}`);
+    console.log('A user connected:', socket.id);
 
-    // Room Management
-    socket.on('createRoom', () => {
-        const roomCode = generateRoomCode();
+    // Handle creating a room
+    socket.on('createRoom', (username) => {
+        let roomCode = generateRoomCode();
+        // Ensure the generated room code is unique
+        while (rooms[roomCode]) {
+            roomCode = generateRoomCode();
+        }
         rooms[roomCode] = {
-            players: [],
-            gameState: createInitialGameState()
+            players: [{ id: socket.id, username: username, score: 0 }],
+            hostId: socket.id,
+            gameStarted: false,
+            currentTurnIndex: 0,
+            currentLetter: '',
+            timer: null,
+            maxPlayers: 4 // Set max players for Antakshari
         };
-        joinRoom(roomCode);
+        socket.join(roomCode); // Add the socket to the room
+        socket.emit('roomCreated', roomCode); // Notify the creator of the room code
+        console.log(`Room ${roomCode} created by ${username} (${socket.id})`);
+        io.to(roomCode).emit('updatePlayers', rooms[roomCode].players); // Update all players in the room
     });
 
-    socket.on('joinRoom', (roomCode) => {
-        if (!rooms[roomCode]) {
-            socket.emit('joinError', 'Room not found.');
+    // Handle joining a room
+    socket.on('joinRoom', (roomCode, username) => {
+        const room = rooms[roomCode];
+        if (!room) {
+            socket.emit('roomNotFound');
             return;
         }
-        if (rooms[roomCode].players.length >= 4) {
-            socket.emit('joinError', 'Room is full.');
+        if (room.players.length >= room.maxPlayers) {
+            socket.emit('roomFull');
             return;
         }
-        joinRoom(roomCode);
+        if (room.gameStarted) {
+            socket.emit('gameAlreadyStarted');
+            return;
+        }
+
+        socket.join(roomCode); // Add the joining socket to the room
+        room.players.push({ id: socket.id, username: username, score: 0 }); // Add new player to room's player list
+        socket.emit('roomJoined', roomCode); // Notify the joining player they've joined
+        console.log(`${username} (${socket.id}) joined room ${roomCode}`);
+        io.to(roomCode).emit('updatePlayers', room.players); // Update all players with the new player list
+        // Inform new player about current game state if game hasn't started
+        if (!room.gameStarted) {
+            io.to(roomCode).emit('aiMessage', `${username} has joined the room.`);
+        }
     });
 
-    const joinRoom = (roomCode) => {
-        socket.join(roomCode);
-        const player = {
-            id: socket.id,
-            username: socket.handshake.query.username,
-            score: 0
-        };
-        rooms[roomCode].players.push(player);
-        socket.data.roomCode = roomCode;
-
-        // Notify the new user they've joined
-        socket.emit(rooms[roomCode].players.length === 1 ? 'roomCreated' : 'joinedRoom', roomCode);
-
-        // Notify existing users in the room about the new player
-        const otherPlayers = rooms[roomCode].players.filter(p => p.id !== socket.id);
-        otherPlayers.forEach(p => socket.to(p.id).emit('userJoined', player));
-
-        // Send the full player list to everyone in the room
-        io.to(roomCode).emit('updatePlayers', rooms[roomCode].players);
-        io.to(roomCode).emit('updateGameState', rooms[roomCode].gameState);
-    };
-
-    // WebRTC Signaling
-    socket.on('signal', (data) => {
-        // Relay signal to the specific user
-        io.to(data.to).emit('signal', {
-            from: data.from,
-            sdp: data.sdp,
-            candidate: data.candidate
-        });
-    });
-
-    // Game Logic
-    socket.on('startGame', () => {
-        const roomCode = socket.data.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
-
-        // Only the host (first player) can start
-        if (rooms[roomCode].players[0].id !== socket.id) return;
-
+    // Handle starting the game
+    socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
-        if (room.gameState.isGameRunning) return;
+        // Ensure room exists, only host can start, and game is not already started
+        if (!room || room.hostId !== socket.id || room.gameStarted) {
+            return;
+        }
 
-        // Reset scores
-        room.players.forEach(p => p.score = 0);
-
-        room.gameState.isGameRunning = true;
-        room.gameState.currentPlayerIndex = 0;
-        room.gameState.currentPlayerId = room.players[0].id;
-        room.gameState.currentLetter = HINDI_CONSONANTS[Math.floor(Math.random() * HINDI_CONSONANTS.length)];
-        room.gameState.status = "Game in Progress";
-        
-        startTurn(roomCode);
+        room.gameStarted = true;
+        room.currentTurnIndex = 0; // Start with the first player
+        room.currentLetter = hindiLetters[Math.floor(Math.random() * hindiLetters.length)]; // Pick a random starting letter
+        io.to(roomCode).emit('gameStarted', room.currentLetter, room.players[room.currentTurnIndex].id);
+        io.to(roomCode).emit('aiMessage', `Game started! First letter is '${room.currentLetter}'. ${room.players[room.currentTurnIndex].username}'s turn.`);
+        startTurnTimer(roomCode); // Start the timer for the first turn
     });
-    
-    // Disconnect Logic
-    socket.on('disconnect', () => {
-        console.log(`User disconnected: ${socket.id}`);
-        const roomCode = socket.data.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
 
+    // Handle AI judge decision (Correct/Wrong)
+    socket.on('aiDecision', (roomCode, playerId, decision) => {
         const room = rooms[roomCode];
-        const playerIndex = room.players.findIndex(p => p.id === socket.id);
-        if (playerIndex > -1) {
-            room.players.splice(playerIndex, 1);
-            
-            // If the game was running and the current player left, move to the next turn
-            if(room.gameState.isGameRunning && room.gameState.currentPlayerIndex === playerIndex) {
-                // Adjust index if needed
-                if(room.gameState.currentPlayerIndex >= room.players.length) {
-                    room.gameState.currentPlayerIndex = 0;
-                }
-                nextTurn(roomCode);
+        // Ensure room exists, game is started, and decision is for the current player
+        if (!room || !room.gameStarted || room.players[room.currentTurnIndex].id !== playerId) {
+            return;
+        }
+
+        clearTimeout(room.timer); // Stop the current timer as a decision has been made
+
+        const currentPlayer = room.players.find(p => p.id === playerId);
+        if (decision === 'correct') {
+            currentPlayer.score += 10; // Award points for correct song
+            room.currentLetter = hindiLetters[Math.floor(Math.random() * hindiLetters.length)]; // Get a new letter
+            io.to(roomCode).emit('aiMessage', `${currentPlayer.username} sang correctly! New letter is '${room.currentLetter}'.`);
+        } else {
+            io.to(roomCode).emit('aiMessage', `${currentPlayer.username} was wrong or ran out of time.`);
+        }
+        io.to(roomCode).emit('updatePlayers', room.players); // Update scores for all players
+
+        // Move to the next player's turn
+        room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
+        io.to(roomCode).emit('nextTurn', room.currentLetter, room.players[room.currentTurnIndex].id);
+        io.to(roomCode).emit('aiMessage', `${room.players[room.currentTurnIndex].username}'s turn.`);
+        startTurnTimer(roomCode); // Start timer for the next turn
+    });
+
+    /**
+     * Starts a 30-second timer for the current player's turn.
+     * If the timer runs out, the player's turn is automatically marked as 'wrong'.
+     * @param {string} roomCode - The code of the room where the game is being played.
+     */
+    function startTurnTimer(roomCode) {
+        const room = rooms[roomCode];
+        if (room.timer) clearTimeout(room.timer); // Clear any existing timer to prevent multiple timers
+
+        let timeLeft = 30;
+        io.to(roomCode).emit('timerUpdate', timeLeft); // Send initial timer value to clients
+
+        room.timer = setInterval(() => {
+            timeLeft--;
+            io.to(roomCode).emit('timerUpdate', timeLeft); // Send updated timer value
+            if (timeLeft <= 0) {
+                clearInterval(room.timer); // Stop the timer when it reaches zero
+                // Automatically mark as wrong if timer runs out
+                io.to(roomCode).emit('aiDecision', room.players[room.currentTurnIndex].id, 'wrong');
             }
+        }, 1000); // Update every second
+    }
 
-            // If room is empty, delete it
-            if (room.players.length === 0) {
-                delete rooms[roomCode];
-                console.log(`Room ${roomCode} deleted.`);
-            } else {
-                // If host left, assign new host
-                // For simplicity, we don't implement this here, but in a real app you would.
-                
-                // Notify others
-                io.to(roomCode).emit('userLeft', socket.id);
-                io.to(roomCode).emit('updatePlayers', room.players);
-                io.to(roomCode).emit('updateGameState', room.gameState);
+    // Handle WebRTC signaling for peer-to-peer connections
+    // Offers (from initiating peer)
+    socket.on('offer', (roomCode, offer) => {
+        // Broadcast the offer to other clients in the same room (excluding sender)
+        socket.to(roomCode).emit('offer', socket.id, offer);
+    });
+
+    // Answers (from receiving peer in response to an offer)
+    socket.on('answer', (roomCode, answer) => {
+        // Broadcast the answer to other clients in the same room (excluding sender)
+        socket.to(roomCode).emit('answer', socket.id, answer);
+    });
+
+    // ICE Candidates (network information for establishing direct connection)
+    socket.on('candidate', (roomCode, candidate) => {
+        // Broadcast the candidate to other clients in the same room (excluding sender)
+        socket.to(roomCode).emit('candidate', socket.id, candidate);
+    });
+
+    // Handle disconnection of a user
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+        // Iterate through all rooms to find the disconnected user
+        for (const roomCode in rooms) {
+            const room = rooms[roomCode];
+            const playerIndex = room.players.findIndex(p => p.id === socket.id);
+
+            if (playerIndex !== -1) {
+                const disconnectedPlayer = room.players[playerIndex];
+                room.players.splice(playerIndex, 1); // Remove the player from the room
+                io.to(roomCode).emit('updatePlayers', room.players); // Update player list for remaining players
+                io.to(roomCode).emit('aiMessage', `${disconnectedPlayer.username} has left the room.`);
+
+                // If the host leaves, assign a new host or delete the room
+                if (room.hostId === socket.id) {
+                    if (room.players.length > 0) {
+                        room.hostId = room.players[0].id; // Assign the first remaining player as new host
+                        io.to(roomCode).emit('aiMessage', `${room.players[0].username} is now the host.`);
+                    } else {
+                        // If no players left, clean up the room
+                        clearInterval(room.timer); // Stop any active game timer
+                        delete rooms[roomCode];
+                        console.log(`Room ${roomCode} deleted as all players left.`);
+                    }
+                }
+
+                // Adjust current turn if the disconnected player was the current player
+                if (room.gameStarted && room.players.length > 0) {
+                    // If the current turn index is now out of bounds or points to the disconnected player,
+                    // move to the next valid player.
+                    if (room.currentTurnIndex >= room.players.length || room.players[room.currentTurnIndex].id === disconnectedPlayer.id) {
+                        room.currentTurnIndex = room.currentTurnIndex % room.players.length; // Wrap around if needed
+                        io.to(roomCode).emit('nextTurn', room.currentLetter, room.players[room.currentTurnIndex].id);
+                        io.to(roomCode).emit('aiMessage', `${room.players[room.currentTurnIndex].username}'s turn.`);
+                        startTurnTimer(roomCode); // Restart timer for the new current player
+                    }
+                } else if (room.gameStarted && room.players.length === 0) {
+                    // If game was started and no players left, stop the game
+                    room.gameStarted = false;
+                    clearInterval(room.timer);
+                }
+                break; // Exit loop once the player is found and handled
             }
         }
     });
 });
 
-// --- Game Logic Functions ---
-function createInitialGameState() {
-    return {
-        isGameRunning: false,
-        status: 'Waiting for players...',
-        aiMessage: 'Waiting for host to start...',
-        currentPlayerIndex: -1,
-        currentPlayerId: null,
-        currentLetter: '-',
-        isTimerRunning: false,
-        timeLimit: TIME_LIMIT,
-        timerId: null,
-        players: [] // This will be populated from the room
-    };
-}
-
-function startTurn(roomCode) {
-    const room = rooms[roomCode];
-    if (!room || !room.gameState.isGameRunning || room.players.length === 0) return;
-
-    clearTimeout(room.gameState.timerId);
-
-    const currentPlayer = room.players[room.gameState.currentPlayerIndex];
-    room.gameState.currentPlayerId = currentPlayer.id;
-    room.gameState.aiMessage = `It's ${currentPlayer.username}'s turn! Sing from '${room.gameState.currentLetter}'.`;
-    room.gameState.isTimerRunning = true;
-
-    io.to(roomCode).emit('updateGameState', { ...room.gameState, players: room.players });
-
-    // AI JUDGE SIMULATION: In a real app, you'd analyze audio. Here we use a timer.
-    // We'll simulate a correct answer after 10 seconds for demo purposes.
-    room.gameState.timerId = setTimeout(() => {
-        // If the timer runs out, it's an incorrect answer (timeout)
-        handleTurnResult(roomCode, false, "Time's up!");
-    }, TIME_LIMIT * 1000);
-    
-    // For this demo, let's add a "correct" and "wrong" button to the host's UI in a real app.
-    // Here, we'll just simulate a correct answer after a delay.
-    // NOTE: This is a placeholder for real AI logic.
-    // To make it interactive, you'd have the client emit an event like 'songSung'
-    // and the AI would process it. For now, we'll just cycle turns.
-}
-
-function handleTurnResult(roomCode, isCorrect, reason) {
-    const room = rooms[roomCode];
-    if (!room || !room.gameState.isGameRunning) return;
-
-    const currentPlayer = room.players[room.gameState.currentPlayerIndex];
-
-    if (isCorrect) {
-        currentPlayer.score += 10;
-        room.gameState.currentLetter = HINDI_CONSONANTS[Math.floor(Math.random() * HINDI_CONSONANTS.length)];
-        room.gameState.aiMessage = `Correct, ${currentPlayer.username}! +10 points. Next letter is '${room.gameState.currentLetter}'.`;
-    } else {
-        room.gameState.aiMessage = `${reason}, ${currentPlayer.username}. No points. Same letter for the next player.`;
-    }
-    
-    nextTurn(roomCode);
-}
-
-function nextTurn(roomCode) {
-    const room = rooms[roomCode];
-    if (!room || !room.gameState.isGameRunning || room.players.length === 0) {
-        // Stop the game if no players are left
-        if(room) {
-            room.gameState = createInitialGameState();
-            io.to(roomCode).emit('updateGameState', room.gameState);
-        }
-        return;
-    }
-
-    clearTimeout(room.gameState.timerId);
-    room.gameState.isTimerRunning = false;
-    
-    // Move to the next player
-    room.gameState.currentPlayerIndex = (room.gameState.currentPlayerIndex + 1) % room.players.length;
-
-    io.to(roomCode).emit('updateGameState', { ...room.gameState, players: room.players });
-
-    // Start the next turn after a short delay
-    setTimeout(() => startTurn(roomCode), 3000);
-}
-
-
-// --- Start Server ---
+// Start the server and listen on the specified port
 server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
