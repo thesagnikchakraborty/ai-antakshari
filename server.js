@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 // Render automatically provides the PORT environment variable
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Serve static files (like index.html) from the current directory.
 // This is crucial for serving your frontend files.
