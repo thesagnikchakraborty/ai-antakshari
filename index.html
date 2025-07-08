@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Antakshari - Vocal Combat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --cyan-glow: 0 0 5px rgba(6, 182, 212, 0.8), 0 0 10px rgba(6, 182, 212, 0.6), 0 0 20px rgba(6, 182, 212, 0.4);
+            --red-glow: 0 0 5px rgba(239, 68, 68, 0.8), 0 0 10px rgba(239, 68, 68, 0.6), 0 0 20px rgba(239, 68, 68, 0.4);
+        }
+        body { font-family: 'Rajdhani', sans-serif; background-color: #0a0f1f; color: #e0e0e0; overflow: hidden; }
+        .font-orbitron { font-family: 'Orbitron', sans-serif; }
+        .parallax-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; background-image: radial-gradient(circle at 25% 25%, rgba(10, 15, 31, 0.1) 2%, transparent 2.5%), radial-gradient(circle at 75% 75%, rgba(10, 15, 31, 0.1) 2%, transparent 2.5%); background-size: 50px 50px; animation: move-grid 200s linear infinite; }
+        .parallax-stars { position: fixed; top: 0; left: 0; width: 200%; height: 200%; z-index: -2; background-image: radial-gradient(ellipse at center, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%), radial-gradient(ellipse at center, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 70%); background-size: 1px 1px, 2px 2px; background-position: 50% 50%; animation: move-stars 150s linear infinite; }
+        @keyframes move-grid { 0% { transform: translate(0, 0); } 100% { transform: translate(-50%, -50%); } }
+        @keyframes move-stars { 0% { transform: translate(0, 0); } 100% { transform: translate(-25%, -25%); } }
+        .glass-panel { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(6, 182, 212, 0.2); }
+        .active-player-glow { box-shadow: var(--cyan-glow); border-color: rgba(6, 182, 212, 0.8) !important; }
+        .ai-orb { width: 80px; height: 80px; border-radius: 50%; background: radial-gradient(circle, #06b6d4 0%, #083344 70%); box-shadow: var(--cyan-glow); animation: pulse-orb 2s infinite ease-in-out; position: relative; }
+        .ai-orb::before { content: ''; position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 2px solid #06b6d4; animation: sonar-ring 2s infinite linear; }
+        @keyframes pulse-orb { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.05); opacity: 0.8; } }
+        @keyframes sonar-ring { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(1.5); opacity: 0; } }
+        .btn-futuristic { background-color: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.5); color: #93c5fd; transition: all 0.3s ease; }
+        .btn-futuristic:hover:not(:disabled) { background-color: rgba(6, 182, 212, 0.3); box-shadow: var(--cyan-glow); color: #e0f2fe; }
+        .btn-futuristic:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-danger { background-color: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.5); }
+        .btn-danger:hover { background-color: rgba(220, 38, 38, 0.3); box-shadow: var(--red-glow); }
+        .modal-container { background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(5px); }
+        .player-card video { transform: scaleX(-1); } /* Mirror the video */
+        .player-card.empty { border-style: dashed; border-color: rgba(6, 182, 212, 0.3); }
+    </style>
+</head>
+<body class="w-full h-screen p-4 lg:p-6 flex flex-col">
+    <div class="parallax-bg"></div>
+    <div class="parallax-stars"></div>
+
+    <!-- Lobby/Entry Modal -->
+    <div id="lobby-modal" class="modal-container fixed inset-0 z-50 flex items-center justify-center">
+        <div class="glass-panel rounded-lg p-8 text-center max-w-md w-full">
+            <h1 class="text-3xl lg:text-4xl font-orbitron text-cyan-300 mb-2" style="text-shadow: var(--cyan-glow);">AI ANTAKSHARI</h1>
+            <p class="mb-6 text-slate-300">The Ultimate Vocal Combat Game</p>
+            <div class="space-y-4">
+                <input id="username-input" type="text" placeholder="Enter Your Alias" class="w-full bg-slate-900/50 border border-cyan-700 rounded-md p-3 text-center text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-400">
+                <button id="create-room-btn" class="w-full py-3 rounded-md btn-futuristic font-bold text-lg">CREATE PRIVATE ROOM</button>
+                <div class="flex items-center gap-2">
+                    <hr class="flex-grow border-cyan-800"> <span class="text-slate-400">OR</span> <hr class="flex-grow border-cyan-800">
+                </div>
+                <div class="flex gap-2">
+                    <input id="room-code-input" type="text" placeholder="Enter Room Code" class="w-full bg-slate-900/50 border border-cyan-700 rounded-md p-3 text-center text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-400">
+                    <button id="join-room-btn" class="py-3 px-6 rounded-md btn-futuristic font-bold">JOIN</button>
+                </div>
+            </div>
+            <p id="lobby-error" class="text-red-400 mt-4 h-5"></p>
+        </div>
+    </div>
+
+    <!-- Main App Container (hidden initially) -->
+    <div id="app-container" class="w-full h-full flex-col gap-4 relative hidden">
+        <header class="flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <h1 class="text-3xl lg:text-4xl font-orbitron text-cyan-300" style="text-shadow: var(--cyan-glow);">AI ANTAKSHARI</h1>
+                <div id="room-info" class="glass-panel px-4 py-2 rounded-md">
+                    Room Code: <span id="room-code-display" class="font-bold text-amber-300 cursor-pointer" title="Click to copy"></span>
+                </div>
+            </div>
+            <div id="game-status" class="text-lg font-semibold text-amber-400">Waiting for players...</div>
+        </header>
+
+        <main class="flex-grow grid grid-cols-1 lg:grid-cols-4 gap-4 h-[calc(100%-150px)]">
+            <section id="players-grid" class="lg:col-span-3 grid grid-cols-2 grid-rows-2 gap-4 h-full">
+                <!-- Player cards will be dynamically inserted here -->
+            </section>
+
+            <aside class="lg:col-span-1 glass-panel rounded-lg p-4 flex flex-col justify-between">
+                <div class="flex flex-col items-center text-center gap-4">
+                    <h2 class="font-orbitron text-xl text-cyan-300">AI JUDGE</h2>
+                    <div class="ai-orb"></div>
+                    <p id="ai-message" class="h-20 text-lg text-amber-300 font-semibold">Waiting for host to start...</p>
+                </div>
+                <div class="space-y-4">
+                    <div class="text-center">
+                        <p class="text-sm text-cyan-400">NEXT LETTER</p>
+                        <p id="current-letter" class="text-6xl font-orbitron text-white">-</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-sm text-cyan-400">TIME REMAINING</p>
+                        <div class="w-full bg-slate-700 rounded-full h-4 mt-1 border border-cyan-800">
+                            <div id="timer-bar" class="bg-cyan-400 h-full rounded-full transition-all duration-1000 linear" style="width: 100%;"></div>
+                        </div>
+                        <p id="timer-text" class="text-2xl font-orbitron text-white mt-1">30</p>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <button id="start-game-btn" class="w-full py-2 rounded-md btn-futuristic font-bold">START GAME</button>
+                    <button onclick="window.location.reload()" class="w-full py-2 rounded-md btn-futuristic btn-danger">LEAVE MATCH</button>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script>
+        // --- CONFIG ---
+        // IMPORTANT: Replace with your server's address.
+        // For local testing, it's 'http://localhost:3000'.
+        // For a deployed server, it would be 'https://your-server-domain.com'.
+        const SERVER_URL = 'http://localhost:3000';
+
+        // --- DOM Elements ---
+        const lobbyModal = document.getElementById('lobby-modal');
+        const appContainer = document.getElementById('app-container');
+        const createRoomBtn = document.getElementById('create-room-btn');
+        const joinRoomBtn = document.getElementById('join-room-btn');
+        const usernameInput = document.getElementById('username-input');
+        const roomCodeInput = document.getElementById('room-code-input');
+        const lobbyError = document.getElementById('lobby-error');
+        const roomCodeDisplay = document.getElementById('room-code-display');
+        const playersGrid = document.getElementById('players-grid');
+        const aiMessageEl = document.getElementById('ai-message');
+        const gameStatusEl = document.getElementById('game-status');
+        const currentLetterEl = document.getElementById('current-letter');
+        const timerBarEl = document.getElementById('timer-bar');
+        const timerTextEl = document.getElementById('timer-text');
+        const startGameBtn = document.getElementById('start-game-btn');
+        const roomInfo = document.getElementById('room-info');
+
+        // --- State ---
+        let socket;
+        let localStream;
+        let peerConnections = {};
+        let myId = '';
+        let isHost = false;
+
+        // --- WebRTC Configuration ---
+        const peerConnectionConfig = {
+            iceServers: [
+                { 'urls': 'stun:stun.l.google.com:19302' },
+                { 'urls': 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // --- Player Card Template ---
+        const createPlayerCard = (player) => {
+            const isEmpty = !player.id;
+            const cardId = `player-card-${player.id || 'empty'}`;
+            const videoId = `video-${player.id || 'empty'}`;
+            const scoreId = `score-${player.id || 'empty'}`;
+
+            return `
+                <div id="${cardId}" class="player-card glass-panel rounded-lg p-3 flex flex-col justify-between relative transition-all duration-300 ${isEmpty ? 'empty' : ''}">
+                    <video id="${videoId}" class="bg-black/50 rounded-md w-full h-full object-cover" autoplay playsinline ${player.isMe ? 'muted' : ''}></video>
+                    ${!isEmpty ? `
+                    <div class="absolute bottom-3 left-3 bg-black/50 p-2 rounded-md">
+                        <h3 class="font-bold text-white">${player.username} ${player.isMe ? '(You)' : ''}</h3>
+                        <p class="text-cyan-300 text-sm">Score: <span id="${scoreId}">0</span></p>
+                    </div>` : `
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <p class="text-slate-400 font-semibold">Waiting for player...</p>
+                    </div>
+                    `}
+                </div>
+            `;
+        };
+        
+        // --- Initialization ---
+        const initialize = () => {
+            createRoomBtn.addEventListener('click', createRoom);
+            joinRoomBtn.addEventListener('click', joinRoom);
+            startGameBtn.addEventListener('click', () => socket.emit('startGame'));
+            roomInfo.addEventListener('click', copyRoomCode);
+        };
+
+        const connectSocket = async () => {
+            const username = usernameInput.value.trim();
+            if (!username) {
+                lobbyError.textContent = 'Please enter an alias.';
+                return false;
+            }
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            } catch (error) {
+                console.error("Error accessing media devices.", error);
+                lobbyError.textContent = 'Camera/Mic access denied. Please enable and retry.';
+                return false;
+            }
+
+            socket = io(SERVER_URL, { query: { username } });
+            setupSocketListeners();
+            return true;
+        };
+
+        async function createRoom() {
+            isHost = true;
+            if (await connectSocket()) {
+                socket.emit('createRoom');
+            }
+        }
+
+        async function joinRoom() {
+            const roomCode = roomCodeInput.value.trim().toUpperCase();
+            if (!roomCode) {
+                lobbyError.textContent = 'Please enter a room code.';
+                return;
+            }
+            if (await connectSocket()) {
+                socket.emit('joinRoom', roomCode);
+            }
+        }
+
+        // --- Socket.IO Event Handlers ---
+        const setupSocketListeners = () => {
+            socket.on('connect', () => { myId = socket.id; });
+            socket.on('roomCreated', (roomCode) => enterGame(roomCode, true));
+            socket.on('joinedRoom', (roomCode) => enterGame(roomCode, false));
+            socket.on('joinError', (message) => {
+                lobbyError.textContent = message;
+                socket.disconnect();
+            });
+            socket.on('updatePlayers', updatePlayersList);
+            socket.on('userJoined', handleUserJoined);
+            socket.on('userLeft', handleUserLeft);
+            socket.on('signal', handleSignal);
+            socket.on('updateGameState', updateGameState);
+        };
+
+        const enterGame = (roomCode, isHost) => {
+            lobbyModal.style.display = 'none';
+            appContainer.style.display = 'flex';
+            roomCodeDisplay.textContent = roomCode;
+            startGameBtn.style.display = isHost ? 'block' : 'none';
+        };
+
+        const updatePlayersList = (players) => {
+            playersGrid.innerHTML = '';
+            const playerObjects = [];
+            for (let i = 0; i < 4; i++) {
+                if (players[i]) {
+                    playerObjects.push({ ...players[i], isMe: players[i].id === myId });
+                } else {
+                    playerObjects.push({}); // Empty slot
+                }
+            }
+
+            playerObjects.forEach(p => {
+                playersGrid.innerHTML += createPlayerCard(p);
+            });
+
+            // Attach local stream to my video element
+            const myVideo = document.getElementById(`video-${myId}`);
+            if (myVideo && localStream) {
+                myVideo.srcObject = localStream;
+            }
+        };
+
+        // --- WebRTC Signaling ---
+        const handleUserJoined = (newUser) => {
+            const peerConnection = new RTCPeerConnection(peerConnectionConfig);
+            peerConnections[newUser.id] = peerConnection;
+
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('signal', { to: newUser.id, from: myId, candidate: event.candidate });
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                const remoteVideo = document.getElementById(`video-${newUser.id}`);
+                if (remoteVideo) {
+                    remoteVideo.srcObject = event.streams[0];
+                }
+            };
+
+            peerConnection.createOffer()
+                .then(offer => peerConnection.setLocalDescription(offer))
+                .then(() => {
+                    socket.emit('signal', { to: newUser.id, from: myId, sdp: peerConnection.localDescription });
+                });
+        };
+
+        const handleSignal = async (data) => {
+            const { from, sdp, candidate } = data;
+            let peerConnection = peerConnections[from];
+
+            if (sdp) { // This is an offer or an answer
+                if (!peerConnection) { // It's an offer from a new peer
+                    peerConnection = new RTCPeerConnection(peerConnectionConfig);
+                    peerConnections[from] = peerConnection;
+
+                    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                    peerConnection.onicecandidate = event => {
+                        if (event.candidate) {
+                            socket.emit('signal', { to: from, from: myId, candidate: event.candidate });
+                        }
+                    };
+
+                    peerConnection.ontrack = event => {
+                        const remoteVideo = document.getElementById(`video-${from}`);
+                        if (remoteVideo) {
+                            remoteVideo.srcObject = event.streams[0];
+                        }
+                    };
+                }
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+
+                if (sdp.type === 'offer') {
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    socket.emit('signal', { to: from, from: myId, sdp: peerConnection.localDescription });
+                }
+            } else if (candidate) { // This is an ICE candidate
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            }
+        };
+        
+        const handleUserLeft = (userId) => {
+            if (peerConnections[userId]) {
+                peerConnections[userId].close();
+                delete peerConnections[userId];
+            }
+        };
+
+        // --- Game State Updates ---
+        const updateGameState = (gameState) => {
+            gameStatusEl.textContent = gameState.status;
+            currentLetterEl.textContent = gameState.currentLetter;
+            aiMessageEl.textContent = gameState.aiMessage;
+
+            // Update scores and active player glow
+            document.querySelectorAll('.player-card').forEach(card => card.classList.remove('active-player-glow'));
+            
+            gameState.players.forEach(player => {
+                const scoreEl = document.getElementById(`score-${player.id}`);
+                if (scoreEl) scoreEl.textContent = player.score;
+                
+                if (player.id === gameState.currentPlayerId) {
+                    const cardEl = document.getElementById(`player-card-${player.id}`);
+                    if (cardEl) cardEl.classList.add('active-player-glow');
+                }
+            });
+
+            // Timer update
+            clearInterval(window.gameTimerInterval);
+            if (gameState.isTimerRunning) {
+                let timeLeft = gameState.timeLimit;
+                timerTextEl.textContent = timeLeft;
+                timerBarEl.style.width = '100%';
+                
+                window.gameTimerInterval = setInterval(() => {
+                    timeLeft--;
+                    if (timeLeft >= 0) {
+                        timerTextEl.textContent = timeLeft;
+                        const percentage = (timeLeft / gameState.timeLimit) * 100;
+                        timerBarEl.style.width = `${percentage}%`;
+                        if (timeLeft < 10) {
+                            timerBarEl.classList.remove('bg-cyan-400');
+                            timerBarEl.classList.add('bg-red-500');
+                        } else {
+                            timerBarEl.classList.remove('bg-red-500');
+                            timerBarEl.classList.add('bg-cyan-400');
+                        }
+                    }
+                }, 1000);
+            } else {
+                timerTextEl.textContent = gameState.timeLimit;
+                timerBarEl.style.width = '100%';
+            }
+            
+            if (gameState.isGameRunning) {
+                startGameBtn.disabled = true;
+            }
+        };
+        
+        // --- Utility ---
+        function copyRoomCode() {
+            navigator.clipboard.writeText(roomCodeDisplay.textContent).then(() => {
+                const originalText = roomInfo.innerHTML;
+                roomInfo.innerHTML = '<span class="text-green-400 font-bold">Copied!</span>';
+                setTimeout(() => { roomInfo.innerHTML = originalText; }, 2000);
+            });
+        }
+
+        // --- Start the app ---
+        initialize();
+    </script>
+</body>
+</html>
